@@ -4,51 +4,85 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::thread;
 
+use cpal::traits::{DeviceTrait, HostTrait};
+use rand::seq::SliceRandom; // Required for picking random sounds
+
+// --- 1. HEADPHONE DETECTOR ---
+fn is_headphone_active() -> bool {
+    let host = cpal::default_host();
+    
+    // Grab whatever device the OS is currently routing audio to
+    if let Some(device) = host.default_output_device() {
+        if let Ok(name) = device.name() {
+            let name_lower = name.to_lowercase();
+            
+            // Add any specific names your personal headphones use here!
+            return name_lower.contains("headphone") || 
+                   name_lower.contains("airpods") || 
+                   name_lower.contains("bluetooth") || 
+                   name_lower.contains("earbud") ||
+                   name_lower.contains("headset");
+        }
+    }
+    false // Default to false so we don't accidentally play on speakers
+}
+
+// --- 2. MAIN ENGINE ---
 fn main() {
-    // 1. Initialize the OS Audio System
-    // We keep the _stream alive in the main thread so audio doesn't cut out
+    // Initialize the OS Audio System
     let (_stream, stream_handle) = OutputStream::try_default().unwrap();
     
-    // 2. Pre-load the audio file into memory (RAM)
-    // Place a short, punchy file named 'thock.wav' in your project root
-    let audio_file_path = "thock.wav";
-    let audio_bytes = std::fs::read(audio_file_path)
-        .expect("Failed to read thock.wav. Make sure the file exists in the directory!");
+    // Create a pool to hold all our audio bytes in RAM
+    let mut audio_pool: Vec<Arc<Vec<u8>>> = Vec::new();
     
-    // Wrap the bytes in an Arc (Atomic Reference Counted pointer) 
-    // so we can safely share it across multiple high-speed threads
-    let audio_data = Arc::new(audio_bytes);
+    println!("Loading sound files...");
+    
+    // Loop through the sounds directory and load every file
+    // (Adjust the '20' to however many clicks your Python script generated)
+    for i in 0..20 {
+        let file_path = format!("sounds/click_{}.wav", i);
+        if let Ok(audio_bytes) = std::fs::read(&file_path) {
+            audio_pool.push(Arc::new(audio_bytes));
+        }
+    }
+    
+    if audio_pool.is_empty() {
+        panic!("No audio files found! Make sure you ran the Python extractor and have a 'sounds' folder next to your executable.");
+    }
 
-    println!("⌨️ Ghost-Switches is running! Listening for keystrokes...");
+    println!("⌨️ Loaded {} clicks. Ghost-Switches is running!", audio_pool.len());
 
-    // 3. Define the OS-level keylogger callback
+    // Wrap the pool in an Arc so it can be safely shared across threads
+    let shared_pool = Arc::new(audio_pool);
+
+    // Define the OS-level keylogger callback
     let callback = move |event: Event| {
-        // We only care when a key goes DOWN, not when it comes UP (for now)
         if let EventType::KeyPress(_) = event.event_type {
             
-            // Clone our references (this is extremely fast and doesn't copy the actual audio data)
-            let data = Arc::clone(&audio_data);
-            let handle = stream_handle.clone();
-            
-            // 4. Spawn a lightweight background thread
-            // If we play audio on the main thread, it will block the OS input stream 
-            // and make your real keyboard lag.
-            thread::spawn(move || {
-                // Read the audio from RAM
-                let cursor = Cursor::new((*data).clone());
+            // ONLY proceed if headphones are actively connected
+            if is_headphone_active() {
+                let pool = Arc::clone(&shared_pool);
+                let handle = stream_handle.clone();
                 
-                if let Ok(decoder) = Decoder::new(cursor) {
-                    let sink = Sink::try_new(&handle).unwrap();
-                    sink.append(decoder);
+                thread::spawn(move || {
+                    let mut rng = rand::thread_rng();
                     
-                    // Keep the thread alive just long enough for the "thock" to finish
-                    sink.sleep_until_end(); 
-                }
-            });
+                    // Pick a random sound from the pool
+                    if let Some(random_audio) = pool.choose(&mut rng) {
+                        let cursor = Cursor::new((**random_audio).clone());
+                        
+                        if let Ok(decoder) = Decoder::new(cursor) {
+                            let sink = Sink::try_new(&handle).unwrap();
+                            sink.append(decoder);
+                            sink.sleep_until_end(); 
+                        }
+                    }
+                });
+            }
         }
     };
 
-    // 5. Start listening. This will block the main thread forever.
+    // Start listening. This will block the main thread forever.
     if let Err(error) = listen(callback) {
         println!("Error: {:?}", error);
     }
