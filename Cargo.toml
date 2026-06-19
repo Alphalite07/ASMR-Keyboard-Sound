@@ -1,0 +1,3 @@
+[dependencies]
+rdev = "0.5.3"
+rodio = "0.17.1"
