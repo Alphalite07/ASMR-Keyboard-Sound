@@ -1,5 +1,4 @@
-[dependencies]
-rdev = "0.5.3"
-rodio = "0.17.1"
-rand = "0.8.5"
-cpal = "0.15.2"
+# config.toml
+sound_folder = "./sounds"
+headphone_keywords = ["airpods", "bose", "galaxy buds"]
+volume = 0.8
